@@ -1,6 +1,5 @@
 
 import numpy as np
-import pandas as pd
 import pickle
 from tqdm import tqdm
 from collections import Counter
@@ -13,68 +12,14 @@ from torch import nn, optim
 import torch.nn.functional as F
 from pytorch_pretrained_bert import BertTokenizer
 from pytorch_pretrained_bert.optimization import BertAdam, warmup_linear
-from torch.utils.data import TensorDataset, DataLoader
 
 from sklearn import metrics # https://scikit-learn.org/stable/modules/classes.html#module-sklearn.metrics
-from sklearn.model_selection import train_test_split
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.linear_model import LogisticRegression
 from sklearn.exceptions import UndefinedMetricWarning
 import warnings
 warnings.filterwarnings("ignore", category=UndefinedMetricWarning)
 
 from model import BertPunc
-
-def load_file(filename):
-    with open(filename, 'r', encoding='utf-8') as f:
-        data = f.readlines()
-    return data
-
-def encode_data(data, tokenizer, punctuation_enc):
-    """
-    Converts words to (BERT) tokens and puntuation to given encoding.
-    Note that words can be composed of multiple tokens.
-    """
-    X = []
-    Y = []
-    for line in data:
-        word, punc = line.split('\t')
-        punc = punc.strip()
-        tokens = tokenizer.tokenize(word)
-        x = tokenizer.convert_tokens_to_ids(tokens)
-        y = [punctuation_enc[punc]]
-        if len(x) > 0:
-            if len(x) > 1:
-                y = (len(x)-1)*[0]+y
-            X += x
-            Y += y
-    return X, Y
-
-def insert_target(x, segment_size):
-    """
-    Creates segments of surrounding words for each word in x.
-    Inserts a zero token halfway the segment.
-    """
-    X = []
-    x_pad = x[-((segment_size-1)//2-1):]+x+x[:segment_size//2]
-
-    for i in range(len(x_pad)-segment_size+2):
-        segment = x_pad[i:i+segment_size-1]
-        segment.insert((segment_size-1)//2, 0)
-        X.append(segment)
-
-    return np.array(X)
-
-def preprocess_data(data, tokenizer, punctuation_enc, segment_size):
-    X, y = encode_data(data, tokenizer, punctuation_enc)
-    X = insert_target(X, segment_size)
-    return X, y
-
-def create_data_loader(X, y, shuffle, batch_size):
-    data_set = TensorDataset(torch.from_numpy(X).long(), torch.from_numpy(np.array(y)).long())
-    data_loader = DataLoader(data_set, batch_size=batch_size, shuffle=shuffle)
-    return data_loader
+from data import load_file, preprocess_data, create_data_loader
 
 def validate(model, criterion, epoch, epochs, iteration, iterations, data_loader_valid, save_path, train_loss, best_val_loss, best_model_path):
 
@@ -199,7 +144,7 @@ if __name__ == '__main__':
     segment_size = 32
     dropout = 0.3
     epochs_top = 3
-    iterations_top = 3
+    iterations_top = 2
     batch_size_top = 1024
     learning_rate_top = 1e-5
     epochs_all = 6
@@ -238,7 +183,7 @@ if __name__ == '__main__':
 
     print('INITIALIZING MODEL...')
     output_size = len(punctuation_enc)
-    bert_punc = torch.nn.DataParallel(BertPunc(segment_size, output_size, dropout).cuda())
+    bert_punc = nn.DataParallel(BertPunc(segment_size, output_size, dropout).cuda())
 
     print('TRAINING TOP LAYER...')
     data_loader_train = create_data_loader(X_train, y_train, True, batch_size_top)
