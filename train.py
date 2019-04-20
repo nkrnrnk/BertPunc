@@ -21,11 +21,14 @@ warnings.filterwarnings("ignore", category=UndefinedMetricWarning)
 from model import BertPunc
 from data import load_file, preprocess_data, create_data_loader
 
-def validate(model, criterion, epoch, epochs, iteration, iterations, data_loader_valid, save_path, train_loss, best_val_loss, best_model_path):
+def validate(model, criterion, epoch, epochs, iteration, iterations, data_loader_valid, save_path, train_loss, best_val_loss, best_model_path, punctuation_enc):
 
     val_losses = []
     val_accs = []
     val_f1s = []
+
+    label_keys = list(punctuation_enc.keys())
+    label_vals = list(punctuation_enc.values())
 
     for inputs, labels in tqdm(data_loader_valid, total=len(data_loader_valid)):
 
@@ -39,7 +42,7 @@ def validate(model, criterion, epoch, epochs, iteration, iterations, data_loader
             y_pred = output.argmax(dim=1).cpu().data.numpy().flatten()
             y_true = labels.cpu().data.numpy().flatten()
             val_accs.append(metrics.accuracy_score(y_true, y_pred))
-            val_f1s.append(metrics.f1_score(y_true, y_pred, average=None, labels=[0, 1, 2, 3]))
+            val_f1s.append(metrics.f1_score(y_true, y_pred, average=None, labels=label_vals))
     
     val_loss = np.mean(val_losses)
     val_acc = np.mean(val_accs)
@@ -55,20 +58,24 @@ def validate(model, criterion, epoch, epochs, iteration, iterations, data_loader
         best_val_loss = val_loss
         best_model_path = model_path
 
+    f1_cols = ';'.join(['f1_'+key for key in label_keys])
+
     progress_path = save_path+'progress.csv'
     if not os.path.isfile(progress_path):
         with open(progress_path, 'w') as f:
-            f.write('time;epoch;iteration;training loss;loss;accuracy;f1_space;f1_comma;f1_period;f1_question\n')
+            f.write('time;epoch;iteration;training loss;loss;accuracy;'+f1_cols+'\n')
+
+    f1_vals = ';'.join(['{:.4f}'.format(val) for val in val_f1])
 
     with open(progress_path, 'a') as f:
-        f.write('{};{};{};{:.4f};{:.4f};{:.4f};{:.4f};{:.4f};{:.4f};{:.4f}\n'.format(
+        f.write('{};{};{};{:.4f};{:.4f};{:.4f};{}\n'.format(
             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             epoch+1,
             iteration,
             train_loss,
             val_loss,
             val_acc,
-            *val_f1
+            f1_vals
             ))
 
     print("Epoch: {}/{}".format(epoch+1, epochs),
@@ -76,12 +83,12 @@ def validate(model, criterion, epoch, epochs, iteration, iterations, data_loader
           "Loss: {:.4f}".format(train_loss),
           "Val Loss: {:.4f}".format(val_loss),
           "Acc: {:.4f}".format(val_acc),
-          "F1: {:.4f} {:.4f} {:.4f} {:.4f}".format(*val_f1),
+          "F1: {}".format(f1_vals),
           improved)
 
     return best_val_loss, best_model_path
 
-def train(model, optimizer, criterion, epochs, data_loader_train, data_loader_valid, save_path, iterations=3, best_val_loss=1e9):
+def train(model, optimizer, criterion, epochs, data_loader_train, data_loader_valid, save_path, punctuation_enc, iterations=3, best_val_loss=1e9):
 
     print_every = len(data_loader_train)//iterations+1
     clip = 5
@@ -112,7 +119,8 @@ def train(model, optimizer, criterion, epochs, data_loader_train, data_loader_va
                 
                 pbar.close()
                 model.eval()
-                best_val_loss, best_model_path = validate(model, criterion, e, epochs, iteration, iterations, data_loader_valid, save_path, train_loss, best_val_loss, best_model_path)
+                best_val_loss, best_model_path = validate(model, criterion, e, epochs, iteration, iterations, data_loader_valid, 
+                    save_path, train_loss, best_val_loss, best_model_path, punctuation_enc)
                 model.train()
                 pbar = tqdm(total=print_every)
                 iteration += 1
@@ -121,7 +129,8 @@ def train(model, optimizer, criterion, epochs, data_loader_train, data_loader_va
 
         pbar.close()
         model.eval()
-        best_val_loss, best_model_path = validate(model, criterion, e, epochs, iteration, iterations, data_loader_valid, save_path, train_loss, best_val_loss, best_model_path)
+        best_val_loss, best_model_path = validate(model, criterion, e, epochs, iteration, iterations, data_loader_valid, 
+            save_path, train_loss, best_val_loss, best_model_path, punctuation_enc)
         model.train()
         if e < epochs-1:
             pbar = tqdm(total=print_every)
@@ -141,13 +150,18 @@ if __name__ == '__main__':
         'QUESTION': 3
     }
 
+    punctuation_enc = {
+        'O': 0,
+        'PERIOD': 1,
+    }
+
     segment_size = 32
     dropout = 0.3
-    epochs_top = 3
+    epochs_top = 1
     iterations_top = 2
     batch_size_top = 1024
     learning_rate_top = 1e-5
-    epochs_all = 6
+    epochs_all = 4
     iterations_all = 3
     batch_size_all = 256
     learning_rate_all = 1e-5
@@ -156,6 +170,7 @@ if __name__ == '__main__':
         'dropout': dropout,
         'epochs_top': epochs_top,
         'iterations_top': iterations_top,
+        'batch_size_top': batch_size_top,
         'learning_rate_top': learning_rate_top,
         'epochs_all': epochs_all,
         'iterations_all': iterations_all,
@@ -168,18 +183,19 @@ if __name__ == '__main__':
         json.dump(hyperparameters, f)
 
     print('LOADING DATA...')
-    data_train = load_file('data/LREC/train2012')
-    data_valid = load_file('data/LREC/dev2012')
-    data_test = load_file('data/LREC/test2011')
-    data_test_asr = load_file('data/LREC/test2011asr')
+    # data_train = load_file('data/LREC/train2012')
+    # data_valid = load_file('data/LREC/dev2012')
+    # data_test = load_file('data/LREC/test2011')
+    # data_test_asr = load_file('data/LREC/test2011asr')
+    data_train = load_file('data/NPR-podcasts/train')
+    data_valid = load_file('data/NPR-podcasts/valid')
+    data_test = load_file('data/NPR-podcasts/test')
 
     tokenizer = BertTokenizer.from_pretrained('bert-base-uncased', do_lower_case=True)
 
     print('PREPROCESSING DATA...')
     X_train, y_train = preprocess_data(data_train, tokenizer, punctuation_enc, segment_size)
     X_valid, y_valid = preprocess_data(data_valid, tokenizer, punctuation_enc, segment_size)
-    # X_test, y_test = preprocess_data(data_test, tokenizer, punctuation_enc, segment_size)
-    # X_test_asr, y_test_asr = preprocess_data(data_test_asr, tokenizer, punctuation_enc, segment_size)
 
     print('INITIALIZING MODEL...')
     output_size = len(punctuation_enc)
@@ -193,7 +209,7 @@ if __name__ == '__main__':
     optimizer = optim.Adam(bert_punc.parameters(), lr=learning_rate_top)
     criterion = nn.CrossEntropyLoss()
     bert_punc, optimizer, best_val_loss = train(bert_punc, optimizer, criterion, epochs_top, 
-        data_loader_train, data_loader_valid, save_path, iterations_top, best_val_loss=1e9)
+        data_loader_train, data_loader_valid, save_path, punctuation_enc, iterations_top, best_val_loss=1e9)
 
     print('TRAINING ALL LAYERS...')
     data_loader_train = create_data_loader(X_train, y_train, True, batch_size_all)
@@ -203,4 +219,4 @@ if __name__ == '__main__':
     optimizer = optim.Adam(bert_punc.parameters(), lr=learning_rate_all)
     criterion = nn.CrossEntropyLoss()
     bert_punc, optimizer, best_val_loss = train(bert_punc, optimizer, criterion, epochs_all, 
-        data_loader_train, data_loader_valid, save_path, iterations_all, best_val_loss=best_val_loss)
+        data_loader_train, data_loader_valid, save_path, punctuation_enc, iterations_all, best_val_loss=best_val_loss)
